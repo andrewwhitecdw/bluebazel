@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////////
 // MIT License
 //
-// Copyright (c) 2021-2024 NVIDIA Corporation
+// Copyright (c) 2021-2026 NVIDIA Corporation
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -76,21 +76,18 @@ export class UnifiedCodeLensProvider implements vscode.CodeLensProvider {
         this.regexPatterns.push(...runRegexes);
     }
 
-    public provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.CodeLens[] {
+    public async provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
+        if (token.isCancellationRequested) {
+            return [];
+        }
+
         // Match the correct regex based on the document's language
-        const codeLenses: vscode.CodeLens[] = [];
-
-        this.regexPatterns
-            .filter(pattern => pattern.language === document.languageId)
-            .forEach(pattern => {
-                const lenses = this.processRegexPattern(document, pattern, token);
-                codeLenses.push(...lenses);
-            });
-
-        return codeLenses;
+        const patterns = this.regexPatterns.filter(pattern => pattern.language === document.languageId);
+        const results = await Promise.all(patterns.map(pattern => this.processRegexPattern(document, pattern, token)));
+        return results.flat();
     }
 
-    private processRegexPattern(document: vscode.TextDocument, pattern: Pattern, _token: vscode.CancellationToken): vscode.CodeLens[] {
+    private async processRegexPattern(document: vscode.TextDocument, pattern: Pattern, token: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
         const text = document.getText();
         const language = document.languageId; // Detect the language of the document
         const codeLenses: vscode.CodeLens[] = [];
@@ -109,23 +106,41 @@ export class UnifiedCodeLensProvider implements vscode.CodeLensProvider {
             action = 'test';
         }
 
+        // IMPORTANT: compute associated targets once per document (not per match),
+        // and do it async to avoid blocking the extension host during file open.
+        let targets: BazelTarget[] = [];
+        try {
+            targets = await BazelService.extractBazelTargetsAssociatedWithSourceFileAsync(document.fileName);
+        } catch (err) {
+            // If the file isn't in a Bazel workspace or BUILD parsing fails, just don't show lenses.
+            Console.debug(`Failed to infer targets for ${document.fileName}:`, (err as Error)?.message || err);
+            return [];
+        }
+
+        if (targets.length === 0) {
+            return [];
+        }
+
         while ((match = regex.exec(text)) !== null) {
+            if (token.isCancellationRequested) {
+                return codeLenses;
+            }
             let functionName = '';
             if (language === 'cpp' || language === 'c') {
-                // Combine FixtureName and TestName for C++/C tests
-                const fixtureName = match[2];
-                const testName = match[3];
-                functionName = `${fixtureName}.${testName}`;
+                if (pattern.type === PatternType.Test) {
+                    // C++/C gtest regex captures (FixtureName, TestName) in groups 1 and 2
+                    const fixtureName = match[1];
+                    const testName = match[2];
+                    functionName = `${fixtureName}.${testName}`;
+                } else {
+                    // Run pattern captures main() in group 1
+                    functionName = match[1] || '';
+                }
             } else {
-                // Use captured test function name for other languages
-                functionName = match[1] || match[2];
+                // Use captured function name for other languages
+                functionName = match[1] || match[2] || '';
             }
             const line = document.lineAt(document.positionAt(match.index).line);
-            const targets = BazelService.extractBazelTargetsAssociatedWithSourceFile(document.fileName);
-
-            if (targets.length === 0) {
-                continue;
-            }
 
             Console.info(`Installing code lens provider for ${action} on ${functionName}...`);
 

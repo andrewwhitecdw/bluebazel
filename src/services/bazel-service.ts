@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////////
 // MIT License
 //
-// Copyright (c) 2021-2025 NVIDIA Corporation
+// Copyright (c) 2021-2026 NVIDIA Corporation
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -34,7 +34,15 @@ import * as tmp from 'tmp';
 import * as vscode from 'vscode';
 
 
+interface BuildFileCacheEntry {
+    buildFilePath: string;
+    mtimeMs: number;
+    targetsBySourceBasename: Map<string, { ruleType: string; targetName: string }[]>;
+}
+
 export class BazelService {
+
+    private static buildFileCache = new Map<string, BuildFileCacheEntry>();
 
     private readonly isBuildTargetRegex = /_library|_proto|_archive|_module|_object|_bundle|_package|_test|_build/;
     constructor(
@@ -409,6 +417,38 @@ export class BazelService {
     }
 
     /**
+     * Async variant of extractBazelTargetsAssociatedWithSourceFile().
+     * Used by CodeLens to avoid blocking the extension host event loop during file open.
+     */
+    public static async extractBazelTargetsAssociatedWithSourceFileAsync(sourceFilePath: string): Promise<BazelTarget[]> {
+        const dir = path.dirname(sourceFilePath);
+
+        const workspacePath = this.findWorkspaceRoot(dir);
+        if (!workspacePath) {
+            throw new Error('Could not find Bazel workspace');
+        }
+
+        const relativePath = path.relative(workspacePath, dir);
+        if (!relativePath) {
+            throw new Error('Could not compute relative path');
+        }
+
+        const targetNames = await this.getTargetsFromBuildFileWithSourceAsync(dir, sourceFilePath);
+        if (!targetNames) {
+            throw new Error('Could not find any targets in the BUILD file');
+        }
+
+        return targetNames.map((target) => {
+            return {
+                label: target.targetName,
+                ruleType: target.ruleType,
+                bazelPath: `//${relativePath}:${target.targetName}`,
+                buildPath: path.join(BAZEL_BIN, ...relativePath.split('/'), target.targetName || '')
+            } as BazelTarget;
+        });
+    }
+
+    /**
      * Finds the Bazel workspace root by searching for the `WORKSPACE` file.
      * @param currentDir - The directory to start searching from.
      * @returns The Bazel workspace root path as a string, or null if not found.
@@ -486,6 +526,75 @@ export class BazelService {
         }
 
         return matches; // Return all matching rule types and target names
+    }
+
+    private static async getTargetsFromBuildFileWithSourceAsync(dir: string, filePath: string): Promise<{ ruleType: string; targetName: string }[]> {
+        const buildFileNames = ['BUILD', 'BUILD.bazel'];
+        let buildFilePath: string | null = null;
+
+        for (const buildFileName of buildFileNames) {
+            const candidatePath = path.join(dir, buildFileName);
+            if (fs.existsSync(candidatePath)) {
+                buildFilePath = candidatePath;
+                break;
+            }
+        }
+
+        if (!buildFilePath) {
+            return [];
+        }
+
+        const fileName = path.basename(filePath);
+        const entry = await this.getCachedBuildFileTargets(buildFilePath);
+        return entry.get(fileName) || [];
+    }
+
+    /**
+     * Returns a map of source-basename -> matching targets for a BUILD file,
+     * re-reading only when the file's mtime has changed.
+     */
+    private static async getCachedBuildFileTargets(buildFilePath: string): Promise<Map<string, { ruleType: string; targetName: string }[]>> {
+        const stat = await fs.promises.stat(buildFilePath);
+        const cached = this.buildFileCache.get(buildFilePath);
+
+        if (cached && cached.mtimeMs === stat.mtimeMs) {
+            return cached.targetsBySourceBasename;
+        }
+
+        const content = await fs.promises.readFile(buildFilePath, 'utf8');
+
+        const regex = new RegExp(
+            '(\\w+)\\s*\\(\\s*name\\s*=\\s*"(.*?)".*?srcs\\s*=\\s*\\[([^\\]]*?)\\]',
+            'gs'
+        );
+
+        const targetsBySource = new Map<string, { ruleType: string; targetName: string }[]>();
+        let match;
+        while ((match = regex.exec(content)) !== null) {
+            const ruleType = match[1];
+            const targetName = match[2];
+            const srcsContent = match[3];
+
+            const srcFiles = srcsContent
+                .split(',')
+                .map(s => s.trim().replace(/["']/g, ''))
+                .filter(s => s.length > 0);
+
+            for (const srcFile of srcFiles) {
+                const basename = path.basename(srcFile);
+                const list = targetsBySource.get(basename) || [];
+                list.push({ ruleType, targetName });
+                targetsBySource.set(basename, list);
+            }
+        }
+
+        this.buildFileCache.set(buildFilePath, {
+            buildFilePath,
+            mtimeMs: stat.mtimeMs,
+            targetsBySourceBasename: targetsBySource,
+        });
+
+        return targetsBySource;
     }
 
     public async getRunfilesLocation(target: BazelTarget, cancellationToken?: vscode.CancellationToken): Promise<string> {
