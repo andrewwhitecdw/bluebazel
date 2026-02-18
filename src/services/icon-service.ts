@@ -50,7 +50,7 @@ export class IconService {
     private iconThemePath: string | undefined;
 
     constructor() {
-        this.loadIconTheme();
+        this.loadIconTheme().catch(() => {});
     }
 
     /**
@@ -64,10 +64,12 @@ export class IconService {
 
         // Define potential paths for finding the active icon theme
         const searchPaths = [
-            path.join(vscode.env.appRoot, 'extensions'), // Built-in extensions in VSCode app root
-            path.join(os.homedir(), '.vscode', 'extensions'), // User's extensions folder
-            path.join(os.homedir(), '.vscode-server', 'extensions'), // VSCode server for remote
-            path.join(os.homedir(), '.vscode-oss', 'extensions') // OSS version of VSCode
+            path.join(vscode.env.appRoot, 'extensions'),
+            path.join(os.homedir(), '.vscode', 'extensions'),
+            path.join(os.homedir(), '.vscode-server', 'extensions'),
+            path.join(os.homedir(), '.vscode-oss', 'extensions'),
+            path.join(os.homedir(), '.cursor', 'extensions'),
+            path.join(os.homedir(), '.cursor-server', 'extensions')
         ];
 
         // Try to find the theme in each search path

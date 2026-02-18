@@ -19,7 +19,7 @@
         "workspaceContains:MODULE",
         "workspaceContains:MODULE.bazel"
     ],
-    "main": "./out/main.js",
+    "main": "./out/extension.js",
     "contributes": {
         "taskDefinitions": [
             {
