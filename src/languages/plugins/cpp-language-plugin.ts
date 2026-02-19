@@ -48,12 +48,12 @@ export class CppLanguagePlugin implements LanguagePlugin {
     }
 
     public async createDebugRunUnderLaunchConfig(target: BazelTarget,
-        _cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+        cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         const bazelTarget = BazelService.formatBazelTargetFromPath(target.buildPath);
         const bazelArgs = target.getBazelArgs().toString();
         const configArgs = target.getConfigArgs().toString();
         const workingDirectory = '${workspaceFolder}';
-        const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target, cancellationToken);
+        const targetPath = await this.bazelService.getBazelTargetBuildPath(target, cancellationToken, 'cc_binary|cc_test');
         const programPath = path.join(workingDirectory, targetPath);
 
         /* The environment key for type 'cppdbg' is different than
@@ -95,9 +95,9 @@ export class CppLanguagePlugin implements LanguagePlugin {
         return config;
     }
 
-    public async createDebugDirectLaunchConfig(target: BazelTarget, _cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+    public async createDebugDirectLaunchConfig(target: BazelTarget, cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         const workingDirectory = '${workspaceFolder}';
-        const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target, cancellationToken);
+        const targetPath = await this.bazelService.getBazelTargetBuildPath(target, cancellationToken, 'cc_binary|cc_test');
         const programPath = path.join(workingDirectory, targetPath);
 
         /* The environment key for type 'cppdbg' is different than
@@ -134,10 +134,10 @@ export class CppLanguagePlugin implements LanguagePlugin {
 
     public async createDebugAttachConfig(target: BazelTarget,
         port: number,
-        _cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+        cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         const bazelTarget = BazelService.formatBazelTargetFromPath(target.buildPath);
         const workingDirectory = '${workspaceFolder}';
-        const targetPath = target.buildPath;
+        const targetPath = await this.bazelService.getBazelTargetBuildPath(target, cancellationToken, 'cc_binary|cc_test');
         const programPath = path.join(workingDirectory, targetPath);
 
         const envVars = EnvVarsUtils.listToArrayOfObjects(target.getEnvVars().toStringArray());

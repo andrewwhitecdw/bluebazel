@@ -504,10 +504,12 @@ export class BazelService {
         const buildFileContent = fs.readFileSync(buildFilePath, 'utf8');
         const fileName = path.basename(filePath);
 
-        // Updated regex to capture rule type, target name, and `srcs` attribute content
+        // Capture rule type, target name, and `srcs` list content.
+        // The lookahead (?!\n\s*\)) prevents matching across rule boundaries
+        // (a closing paren on its own line terminates each BUILD rule).
         const regex = new RegExp(
-            '(\\w+)\\s*\\(\\s*name\\s*=\\s*"(.*?)".*?srcs\\s*=\\s*\\[([^\\]]*?)\\]',
-            'gs'
+            '(\\w+)\\s*\\(\\s*name\\s*=\\s*"([^"]*)"(?:(?!\\n\\s*\\))[\\s\\S])*?srcs\\s*=\\s*\\[([^\\]]*?)\\]',
+            'g'
         );
 
         const matches: { ruleType: string; targetName: string }[] = [];
@@ -564,8 +566,8 @@ export class BazelService {
         const content = await fs.promises.readFile(buildFilePath, 'utf8');
 
         const regex = new RegExp(
-            '(\\w+)\\s*\\(\\s*name\\s*=\\s*"(.*?)".*?srcs\\s*=\\s*\\[([^\\]]*?)\\]',
-            'gs'
+            '(\\w+)\\s*\\(\\s*name\\s*=\\s*"([^"]*)"(?:(?!\\n\\s*\\))[\\s\\S])*?srcs\\s*=\\s*\\[([^\\]]*?)\\]',
+            'g'
         );
 
         const targetsBySource = new Map<string, { ruleType: string; targetName: string }[]>();
@@ -595,6 +597,121 @@ export class BazelService {
         });
 
         return targetsBySource;
+    }
+
+    /**
+     * Resolves the actual executable path for a Bazel target.
+     * The static buildPath (bazel-bin/pkg/target) may point to a shell script
+     * wrapper rather than the actual ELF binary (e.g. for macro-generated test
+     * targets that wrap a shared binary with a gtest filter).
+     *
+     * Resolution order:
+     *  1. If the file at buildPath is already an ELF binary, return it.
+     *  2. If it is a shell script, parse it for an `exec <binary>` invocation
+     *     and derive the real binary path under bazel-bin/.
+     *  3. Fall back to bazel cquery to locate a matching binary/test dep.
+     *  4. Return the original buildPath unchanged.
+     *
+     * @param ruleKindFilter  pipe-separated rule kinds for the cquery fallback
+     *                        (default: common native binary/test rules)
+     */
+    public async getBazelTargetBuildPath(
+        target: BazelTarget,
+        cancellationToken?: vscode.CancellationToken,
+        ruleKindFilter = 'cc_binary|cc_test|go_binary|go_test'
+    ): Promise<string> {
+        const workspacePath = WorkspaceService.getInstance().getWorkspaceFolder().uri.path;
+        const fullPath = path.join(workspacePath, target.buildPath);
+
+        if (BazelService.isElfBinary(fullPath)) {
+            return target.buildPath;
+        }
+
+        // Try to extract the real binary from a wrapper script (fast, no bazel needed)
+        const scriptBinary = BazelService.extractBinaryFromScript(fullPath);
+        if (scriptBinary) {
+            const resolvedPath = path.join(BAZEL_BIN, scriptBinary);
+            const resolvedFullPath = path.join(workspacePath, resolvedPath);
+            if (BazelService.isElfBinary(resolvedFullPath)) {
+                Console.info(`Resolved executable from wrapper script: ${resolvedPath}`);
+                return resolvedPath;
+            }
+        }
+
+        // If the file doesn't exist at all (pre-build), skip cquery and use
+        // buildPath as-is — cquery may not be available (e.g. dazel environments).
+        if (!fs.existsSync(fullPath)) {
+            return target.buildPath;
+        }
+
+        // Last resort: use cquery to find the actual binary in the dep tree.
+        // This is best-effort; failures fall back to buildPath silently.
+        Console.info(`File at ${target.buildPath} is not an ELF binary, resolving via cquery...`);
+        try {
+            const executable = this.configurationManager.getExecutableCommand();
+            const configArgs = target.getConfigArgs().toString();
+            const command = `${executable} cquery "kind('${ruleKindFilter}', deps(${target.bazelPath}))" --output=files ${configArgs} --compilation_mode=dbg 2>/dev/null | head -1`;
+            const data = await this.shellService.runShellCommand(command, cancellationToken);
+            const resolvedPath = data.stdout.trim().split('\n')[0]?.trim();
+            if (resolvedPath) {
+                Console.info(`Resolved executable path via cquery: ${resolvedPath}`);
+                return resolvedPath;
+            }
+        } catch (error) {
+            Console.warn(`Failed to resolve executable path via cquery: ${error}`);
+        }
+
+        return target.buildPath;
+    }
+
+    private static isElfBinary(filePath: string): boolean {
+        try {
+            const fd = fs.openSync(filePath, 'r');
+            const buffer = Buffer.alloc(4);
+            fs.readSync(fd, buffer, 0, 4, 0);
+            fs.closeSync(fd);
+            return buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Reads a shell script and extracts the executable binary path.
+     * Bazel macro-generated test wrappers typically end with a line like:
+     *   exec path/to/real_binary --gtest_filter=... "$@"
+     * or:
+     *   VAR=val exec path/to/real_binary ...
+     *
+     * The method looks for the last `exec` invocation and extracts a bare
+     * filesystem path (no variable expansions, no flags).
+     */
+    private static extractBinaryFromScript(filePath: string): string | undefined {
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            if (!content.startsWith('#!')) {
+                return undefined;
+            }
+
+            // Match `exec [-c] [-l] [-a name]* <path>`, skipping leading env
+            // assignments. Handles the standard exec builtin flags, then captures
+            // the first token that looks like a filesystem path.
+            const execRegex =
+                /\bexec\s+(?:(?:-[cl]\s+)|(?:-a\s+\S+\s+))*(?:["'])?([.\/\w][^\s"']*)/g;
+
+            let candidate: string | undefined;
+            let m: RegExpExecArray | null;
+            while ((m = execRegex.exec(content)) !== null) {
+                const p = m[1];
+                // Skip shell variable expansions — we can't resolve them
+                if (p.includes('$') || p.includes('`')) continue;
+                candidate = p;
+            }
+
+            return candidate;
+        } catch {
+            return undefined;
+        }
     }
 
     public async getRunfilesLocation(target: BazelTarget, cancellationToken?: vscode.CancellationToken): Promise<string> {

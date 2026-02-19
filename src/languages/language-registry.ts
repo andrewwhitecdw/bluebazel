@@ -42,9 +42,13 @@ export class LanguageRegistry {
         }
     }
 
+    static hasPlugin(language: string | undefined): boolean {
+        return !!language && !!this.plugins[language];
+    }
+
     static getPlugin(language: string | undefined): LanguagePlugin {
         if (!language || !this.plugins[language]) {
-            throw new Error(`No language support for ${language}`);
+            throw new Error(`No language support for ${language}. Supported languages: ${this.getLanguages().join(', ')}`);
         }
         return this.plugins[language];
     }

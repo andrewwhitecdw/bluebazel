@@ -50,9 +50,9 @@ export class GoLanguagePlugin implements LanguagePlugin {
         return target.ruleType.includes('test') ? ['GO_TEST_WRAP=0'] : [];
     }
 
-    public async createDebugDirectLaunchConfig(target: BazelTarget, _cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+    public async createDebugDirectLaunchConfig(target: BazelTarget, cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         const workingDirectory = '${workspaceFolder}';
-        const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target, cancellationToken);
+        const targetPath = await this.bazelService.getBazelTargetBuildPath(target, cancellationToken, 'go_binary|go_test');
         const programPath = path.join(workingDirectory, targetPath);
         const envVars = EnvVarsUtils.listToObject(target.getEnvVars().toStringArray());
         const args = target.getRunArgs().toString();

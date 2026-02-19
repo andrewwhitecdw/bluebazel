@@ -32,6 +32,7 @@ export const languageMapping: Map<string, string> = new Map([
     ['c_', 'c'],
     ['cc_', 'cpp'],
     ['cpp_', 'cpp'],
+    ['gtest_', 'cpp'],
 
     // Java
     ['java_', 'java'],

@@ -50,12 +50,20 @@ export class DebugController implements BazelTargetController {
         private readonly bazelTargetStateManager: BazelTargetStateManager
     ) {}
 
-    private async createAttachConfig(target: BazelTarget, port: number): Promise<vscode.DebugConfiguration> {
+    private async createAttachConfig(target: BazelTarget, port: number, cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         const plugin = LanguageRegistry.getPlugin(target.language);
-        return plugin.createDebugAttachConfig(target, port);
+        return plugin.createDebugAttachConfig(target, port, cancellationToken);
     }
 
     public async execute(target: BazelTarget): Promise<void> {
+        if (!LanguageRegistry.hasPlugin(target.language)) {
+            const supported = LanguageRegistry.getLanguages().join(', ');
+            vscode.window.showErrorMessage(
+                `Cannot debug target "${target.label}": rule type "${target.ruleType}" resolved to unsupported language "${target.language}". Supported languages: ${supported}.`
+            );
+            return;
+        }
+
         try {
             this.bazelTargetStateManager.setTargetState(target, BazelTargetState.Debugging);
 
@@ -157,10 +165,11 @@ export class DebugController implements BazelTargetController {
             const port = await getAvailablePort(cancellationToken);
             Console.info('Found an open port for debugging...');
 
-            // Create a debug attach config
-            const config = await this.createAttachConfig(target, port);
+            // Resolve the executable path and create the attach config BEFORE
+            // starting bazel test — the Bazel server must be free for cquery
+            // to resolve wrapper-script targets to their real binaries.
+            const config = await this.createAttachConfig(target, port, cancellationToken);
             Console.info('Created an attach config...');
-
 
             // Get the command to launch the debug server (including the target)
             const runCommand = this.getDebugInBazelCommand(target, port);
