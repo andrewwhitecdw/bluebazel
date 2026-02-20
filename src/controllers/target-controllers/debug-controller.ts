@@ -130,7 +130,7 @@ export class DebugController implements BazelTargetController {
 
         const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target);
         // Program (executable) path with respect to workspace.
-        const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.path, targetPath);
+        const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath, targetPath);
         const runArgs = target.getRunArgs().toString();
         return `${DebugController.getDebugServerCommand(target, port)} ${programPath} ${runArgs}`;
     }

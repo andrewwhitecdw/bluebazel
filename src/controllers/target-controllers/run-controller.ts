@@ -94,7 +94,7 @@ export class RunController implements BazelTargetController {
         return showProgress(`${toGerund(target.action)} ${target.buildPath}`, async (cancellationToken) => {
             const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target);
             // Program (executable) path with respect to workspace.
-            const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.path, targetPath);
+            const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath, targetPath);
 
             const args = target.getRunArgs().toString();
             const envVars = EnvVarsUtils.listToObject(target.getEnvVars().toStringArray());
@@ -149,7 +149,7 @@ export class RunController implements BazelTargetController {
 
         const targetPath = target.buildPath;//await this.bazelService.getBazelTargetBuildPath(target);
         // Program (executable) path with respect to workspace.
-        const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.path, targetPath);
+        const programPath = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath, targetPath);
         const runArgs = target.getRunArgs().toString();
         return `${programPath} ${runArgs}`;
     }

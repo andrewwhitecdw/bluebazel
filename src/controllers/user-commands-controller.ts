@@ -136,7 +136,7 @@ export class UserCommandsController {
             const outputList = [];
             // Decode newlines before splitting
             const decodedOutput = output.replace(/\\n/g, '\n');
-            for (const element of decodedOutput.split('\n')) {
+            for (const element of decodedOutput.split(/\r?\n/)) {
                 const elementTrimmed = element.trim();
                 if (elementTrimmed.length > 0) outputList.push(elementTrimmed);
             }

@@ -87,7 +87,7 @@ export class BazelParser {
     > {
         const content = await fsPromises.readFile(filePath, 'utf8');
 
-        const lines = content.split('\n'); // Process line by line to reduce memory overhead
+        const lines = content.split(/\r?\n/);
         const parsedTargets: {
             name: string;
             ruleType: string;

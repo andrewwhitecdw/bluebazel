@@ -23,6 +23,7 @@
 // SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////////
 
+import { getBashPath } from './platform-utils';
 import * as child from 'child_process';
 import * as vscode from 'vscode';
 
@@ -49,7 +50,7 @@ export class ShellService {
         return new Promise<ProcessOutput>((resolve, reject) => {
             const execOptions: child.ExecOptions = {
                 cwd: cwd,
-                shell: 'bash',
+                shell: getBashPath(),
                 maxBuffer: Number.MAX_SAFE_INTEGER,
                 windowsHide: false,
                 env: { ...process.env, ...setupEnvVars }
@@ -63,7 +64,7 @@ export class ShellService {
             // Capture stdout line-by-line
             proc.stdout?.on('data', (data: string) => {
                 stdout += data;
-                const lines = data.split('\n'); // Split the incoming data into lines
+                const lines = data.split(/\r?\n/);
                 lines.forEach(line => {
                     if (outputChannel) {
                         outputChannel.appendLine(line); // Append each line to the output channel
@@ -74,7 +75,7 @@ export class ShellService {
             // Capture stderr line-by-line
             proc.stderr?.on('data', (data: string) => {
                 stderr += data;
-                const lines = data.split('\n'); // Split the incoming data into lines
+                const lines = data.split(/\r?\n/);
                 lines.forEach(line => {
                     if (outputChannel) {
                         outputChannel.appendLine(line); // Append each line to the output channel
@@ -105,6 +106,6 @@ export class ShellService {
     }
 
     public async runShellCommand(cmd: string, cancellationToken?: vscode.CancellationToken): Promise<{ stdout: string, stderr: string }> {
-        return ShellService.run(cmd, this.workspaceFolder.uri.path, this.setupEnvVars, cancellationToken, this.outputChannel);
+        return ShellService.run(cmd, this.workspaceFolder.uri.fsPath, this.setupEnvVars, cancellationToken, this.outputChannel);
     }
 }

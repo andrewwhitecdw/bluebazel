@@ -24,6 +24,7 @@
 import { BazelTarget } from '../../models/bazel-target';
 import { BazelService } from '../../services/bazel-service';
 import { EnvVarsUtils } from '../../services/env-vars-utils';
+import { getBashPath, getGdbPath, isWindows } from '../../services/platform-utils';
 import { LanguagePlugin } from '../language-plugin';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -73,15 +74,20 @@ export class CppLanguagePlugin implements LanguagePlugin {
         const envVars = EnvVarsUtils.listToArrayOfObjects(target.getEnvVars().toStringArray());
         const runArgs = target.getRunArgs().toString();
 
+        const sourceFileMap: Record<string, string> = {};
+        if (!isWindows()) {
+            sourceFileMap['/proc/self/cwd'] = workingDirectory;
+        }
+
         const config = {
             name: `${bazelTarget} (Run Under)`,
             type: 'cppdbg',
             request: 'launch',
-            program: '/bin/bash',
+            program: getBashPath(),
             args: ['-c', `./.vscode/bazel_debug.sh ${target.action} --run_under=gdb ${bazelArgs} ${configArgs} ${bazelTarget} ${runArgs}`],
             stopAtEntry: false,
             cwd: workingDirectory,
-            sourceFileMap: { '/proc/self/cwd': workingDirectory },
+            sourceFileMap,
             environment: [ ...EnvVarsUtils.listToArrayOfObjects(this.setupEnvVars), ...envVars ],
             externalConsole: false,
             targetArchitecture: 'x64',
@@ -152,12 +158,12 @@ export class CppLanguagePlugin implements LanguagePlugin {
             request: 'launch',
             program: programPath,
             miDebuggerServerAddress: `127.0.0.1:${port}`,
-            miDebuggerPath: '/usr/bin/gdb',
+            miDebuggerPath: getGdbPath(),
             MIMode: 'gdb',
             stopAtEntry: false,
             cwd: workingDirectory,
             sourceFileMap: {
-                '/proc/self/cwd': workingDirectory,
+                ...(isWindows() ? {} : { '/proc/self/cwd': workingDirectory }),
                 '.': workingDirectory
             },
             environment: [...EnvVarsUtils.listToArrayOfObjects(this.setupEnvVars), ...envVars],

@@ -68,7 +68,7 @@ export class WorkspaceService {
 
     public async getSubdirectoryPaths(root = '') {
         const all = '/' + path.join('/', root, '...');
-        const absoluteRoot = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.path, root);
+        const absoluteRoot = path.join(WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath, root);
 
         return fs.promises.readdir(absoluteRoot, { withFileTypes: true }).then((data) => {
             const res: string[] = new Array(data.length + 1);

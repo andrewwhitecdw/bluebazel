@@ -44,15 +44,15 @@ export class EnvironmentService {
                 // Run the setup command, ensuring it prints the environment variables
                 const result = await ShellService.run(
                     `${envSetupCommand} && echo ${envDelimiter} && env`,
-                    WorkspaceService.getInstance().getWorkspaceFolder().uri.path,
+                    WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath,
                     {},
                     cancellationToken
                 );
 
                 // Remove everything before the delimiter, then split the output by newlines
                 const env = result.stdout
-                    .replace(new RegExp(`[\\s\\S]*?${envDelimiter}\n`, 'g'), '')
-                    .split('\n');
+                    .replace(new RegExp(`[\\s\\S]*?${envDelimiter}\r?\n`, 'g'), '')
+                    .split(/\r?\n/);
 
                 const envArray: string[] = [];
                 let currentVariable = '';

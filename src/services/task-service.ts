@@ -24,6 +24,7 @@
 
 import { EnvVarsUtils } from './env-vars-utils';
 import { ExtensionUtils } from './extension-utils';
+import { getBashPath } from './platform-utils';
 import { clearTerminal } from '../ui/terminal';
 import * as vscode from 'vscode';
 
@@ -70,12 +71,12 @@ export class TaskService {
         let execution: vscode.ShellExecution | vscode.ProcessExecution | vscode.CustomExecution;
         if (executionType === 'shell') {
             execution = new vscode.ShellExecution(command, {
-                cwd: workspaceFolder.uri.path, env: envVarsObj,
-                executable: '/bin/bash',  // Ensure bash is used as the shell
+                cwd: workspaceFolder.uri.fsPath, env: envVarsObj,
+                executable: getBashPath(),
                 shellArgs: ['-c'] });
         } else {
             const args = command.split(' ');
-            execution = new vscode.ProcessExecution(args[0], args.slice(1), { cwd: workspaceFolder.uri.path, env: envVarsObj });
+            execution = new vscode.ProcessExecution(args[0], args.slice(1), { cwd: workspaceFolder.uri.fsPath, env: envVarsObj });
         }
 
         // const taskType = `${CustomTaskProvider.type}-${taskName}-${id}`;  // Dynamically set the task type

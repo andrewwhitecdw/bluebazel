@@ -25,6 +25,7 @@ import { BAZEL_BIN, BazelParser } from './bazel-parser';
 import { languageMapping as bazelRuleTypeLanguageMapping, sortedBazelRuleTypePrefixes } from './bazel-rule-language-mapping';
 import { ConfigurationManager } from './configuration-manager';
 import { Console } from './console';
+import { findFileRecursive, isNativeBinary } from './platform-utils';
 import { ShellService } from './shell-service';
 import { WorkspaceService } from './workspace-service';
 import { BazelAction, BazelTarget } from '../models/bazel-target';
@@ -87,8 +88,9 @@ export class BazelService {
     /**
      * Converts the provided path into a valid Bazel target path.
      */
-    public static formatBazelTargetFromPath(path: string): string {
-        const resultSplitted = path.split('/');
+    public static formatBazelTargetFromPath(buildPath: string): string {
+        const normalized = buildPath.replace(/\\/g, '/');
+        const resultSplitted = normalized.split('/');
         resultSplitted.shift(); // Removes bazel-bin
         const targetName = resultSplitted[resultSplitted.length - 1];
         return '//' + resultSplitted.slice(0, resultSplitted.length - 1).join('/') + ':' + targetName;
@@ -191,7 +193,7 @@ export class BazelService {
             };
 
             sections.forEach(section => {
-                const lines = section.split('\n');
+                const lines = section.split(/\r?\n/);
                 if (lines[0].includes('Run Targets')) {
                     query.runTargets = lines.slice(1); // Skip the header line
                 } else if (lines[0].includes('Test Targets')) {
@@ -253,7 +255,7 @@ export class BazelService {
         Console.info(`Fetching targets with rule type ${ruleTypeRegex} from Bazel BUILD files...`);
 
         // Determine the root directory
-        const workspaceRoot = WorkspaceService.getInstance().getWorkspaceFolder()?.uri.path;
+        const workspaceRoot = WorkspaceService.getInstance().getWorkspaceFolder()?.uri.fsPath;
         rootDir = rootDir || workspaceRoot;
 
         if (!rootDir) {
@@ -294,22 +296,18 @@ export class BazelService {
     /**
      * Searches for bash-completion scripts (e.g., for Bazel) in the specified directory.
      */
-    private async findBashCompleteScript(startDir: string, cancellationToken?: vscode.CancellationToken): Promise<string | undefined> {
-        const possibleFiles = ['bash-complete.*sh', 'bazel-complete.*sh'];
+    private async findBashCompleteScript(startDir: string, _cancellationToken?: vscode.CancellationToken): Promise<string | undefined> {
+        const patterns = [/^bash-complete.*\.sh$/, /^bazel-complete.*\.sh$/];
 
-        for (const file of possibleFiles) {
+        for (const pattern of patterns) {
             try {
-                const result = await this.shellService.runShellCommand(`find ${startDir} -name "${file}"`, cancellationToken);
-
-                if (result.stdout) {
-                    const foundFile = result.stdout.trim();
-                    if (foundFile) {
-                        return foundFile;
-                    }
+                const found = await findFileRecursive(startDir, pattern);
+                if (found) {
+                    return found;
                 }
             } catch (error) {
-                Console.error(`Error finding bash complete script for ${file}:`, error);
-                return Promise.reject(error);  // Rejecting instead of throwing
+                Console.error(`Error finding bash complete script for ${pattern}:`, error);
+                return Promise.reject(error);
             }
         }
 
@@ -325,7 +323,7 @@ export class BazelService {
         cancellationToken?: vscode.CancellationToken
     ): Promise<string[]> {
         try {
-            const workspacePath = WorkspaceService.getInstance().getWorkspaceFolder().uri.path;
+            const workspacePath = WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath;
             const bashCompleteScript = await this.findBashCompleteScript(workspacePath, cancellationToken);
 
             if (!bashCompleteScript) {
@@ -635,10 +633,10 @@ export class BazelService {
         cancellationToken?: vscode.CancellationToken,
         ruleKindFilter = 'cc_binary|cc_test|go_binary|go_test'
     ): Promise<string> {
-        const workspacePath = WorkspaceService.getInstance().getWorkspaceFolder().uri.path;
+        const workspacePath = WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath;
         const fullPath = path.join(workspacePath, target.buildPath);
 
-        if (BazelService.isElfBinary(fullPath)) {
+        if (isNativeBinary(fullPath)) {
             return target.buildPath;
         }
 
@@ -647,7 +645,7 @@ export class BazelService {
         if (scriptBinary) {
             const resolvedPath = path.join(BAZEL_BIN, scriptBinary);
             const resolvedFullPath = path.join(workspacePath, resolvedPath);
-            if (BazelService.isElfBinary(resolvedFullPath)) {
+            if (isNativeBinary(resolvedFullPath)) {
                 Console.info(`Resolved executable from wrapper script: ${resolvedPath}`);
                 return resolvedPath;
             }
@@ -665,9 +663,9 @@ export class BazelService {
         try {
             const executable = this.configurationManager.getExecutableCommand();
             const configArgs = target.getConfigArgs().toString();
-            const command = `${executable} cquery "kind('${ruleKindFilter}', deps(${target.bazelPath}))" --output=files ${configArgs} --compilation_mode=dbg 2>/dev/null | head -1`;
+            const command = `${executable} cquery "kind('${ruleKindFilter}', deps(${target.bazelPath}))" --output=files ${configArgs} --compilation_mode=dbg 2>/dev/null`;
             const data = await this.shellService.runShellCommand(command, cancellationToken);
-            const resolvedPath = data.stdout.trim().split('\n')[0]?.trim();
+            const resolvedPath = data.stdout.trim().split(/\r?\n/)[0]?.trim();
             if (resolvedPath) {
                 Console.info(`Resolved executable path via cquery: ${resolvedPath}`);
                 return resolvedPath;
@@ -677,18 +675,6 @@ export class BazelService {
         }
 
         return target.buildPath;
-    }
-
-    private static isElfBinary(filePath: string): boolean {
-        try {
-            const fd = fs.openSync(filePath, 'r');
-            const buffer = Buffer.alloc(4);
-            fs.readSync(fd, buffer, 0, 4, 0);
-            fs.closeSync(fd);
-            return buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46;
-        } catch {
-            return false;
-        }
     }
 
     /**
@@ -733,19 +719,21 @@ export class BazelService {
         try {
             const executable = this.configurationManager.getExecutableCommand();
 
-            // Create a temporary file for the script path
             const tmpFile = tmp.fileSync();
             const tmpFilePath = tmpFile.name;
 
-            // Run the Bazel command and extract the runfiles location
-            const command = `${executable} run ${target.bazelPath} --script_path=${tmpFilePath} && grep -oP "(?<=cd ).*\\.runfiles" ${tmpFilePath}`;
-            const data = await this.shellService.runShellCommand(command, cancellationToken);
+            const command = `${executable} run ${target.bazelPath} --script_path=${tmpFilePath}`;
+            await this.shellService.runShellCommand(command, cancellationToken);
 
-            // Clean up the temporary file
+            const scriptContent = fs.readFileSync(tmpFilePath, 'utf-8');
             tmpFile.removeCallback();
 
-            // Return the runfiles location
-            return data.stdout.trim();
+            const match = scriptContent.match(/cd\s+(.*?\.runfiles)/);
+            if (match) {
+                return match[1].trim();
+            }
+
+            return '';
         } catch (error) {
             Console.error('Error getting runfiles location', error);
             return Promise.reject(error);
