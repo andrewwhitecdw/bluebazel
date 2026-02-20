@@ -52,6 +52,21 @@ export class BazelService {
     ) { }
 
     /**
+     * Best-effort cancellation of whatever command the Bazel server is
+     * currently running.  Useful when tearing down debug sessions that
+     * may leave orphaned actions inside a Docker container (dazel).
+     */
+    public async cancelRunningCommand(): Promise<void> {
+        const executable = this.configurationManager.getExecutableCommand();
+        try {
+            await this.shellService.runShellCommand(`${executable} cancel`);
+            Console.info('Sent cancel to Bazel server.');
+        } catch {
+            // Acceptable — no command may be running, or cancel unsupported.
+        }
+    }
+
+    /**
      * Fetches the list of Bazel actions that require a target.
      */
     public async fetchTargetActions(): Promise<string[]> {

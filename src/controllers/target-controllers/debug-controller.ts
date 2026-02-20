@@ -158,10 +158,8 @@ export class DebugController implements BazelTargetController {
     }
 
     private async debugInBazel(target: BazelTarget) {
-        // Start a debug server
         return showProgress(`Debugging ${target.action} ${target.bazelPath}`, async (cancellationToken) => {
             Console.info('Start debugging...');
-            // Find an open port
             const port = await getAvailablePort(cancellationToken);
             Console.info('Found an open port for debugging...');
 
@@ -171,47 +169,79 @@ export class DebugController implements BazelTargetController {
             const config = await this.createAttachConfig(target, port, cancellationToken);
             Console.info('Created an attach config...');
 
-            // Get the command to launch the debug server (including the target)
             const runCommand = this.getDebugInBazelCommand(target, port);
 
-            // Launch a debug server and await until the task execution starts
             const serverExec = await this.startDebugServer(target, port, runCommand, cancellationToken);
             Console.info('Started the debug server...');
 
-            // Listen for early cancellation of the debug server
             const waitForPortCancellation = new vscode.CancellationTokenSource();
-            const disposable = vscode.tasks.onDidEndTask(e => {
+            const earlyTaskEndDisp = vscode.tasks.onDidEndTask(e => {
                 if (e.execution === serverExec) {
-                    disposable.dispose();
+                    earlyTaskEndDisp.dispose();
                     waitForPortCancellation.cancel();
                 }
             });
 
             Console.info('Waiting for port to open...');
-            // Wait for the port to open up by polling (the loop cancels when the server does)
             await waitForPort(port, waitForPortCancellation.token);
+            earlyTaskEndDisp.dispose();
+
+            // Register the session-start listener BEFORE calling startDebugging
+            // so we reliably capture the session. The previous approach of reading
+            // vscode.debug.activeDebugSession after startDebugging resolves is
+            // racy — the active session may not be updated yet, leaving
+            // debugSessionId empty and the cleanup handler inert.
+            let resolveSession: (session: vscode.DebugSession) => void;
+            const sessionPromise = new Promise<vscode.DebugSession>(resolve => {
+                resolveSession = resolve;
+            });
+            const startSessionDisp = vscode.debug.onDidStartDebugSession(session => {
+                if (session.name === config.name) {
+                    startSessionDisp.dispose();
+                    resolveSession!(session);
+                }
+            });
 
             Console.info('Start debugging...');
-            // Start debugging
             const started = await vscode.debug.startDebugging(
                 WorkspaceService.getInstance().getWorkspaceFolder(),
                 config
             );
 
-            // Get the debug session id for terminating the server
-            let debugSessionId = '';
-            if (started) {
-                const session = vscode.debug.activeDebugSession;
-                if (session && session.name === config.name) {
-                    debugSessionId = session.id;
-                }
+            if (!started) {
+                startSessionDisp.dispose();
+                Console.error('Failed to start debug session, cleaning up server...');
+                serverExec?.terminate();
+                this.bazelService.cancelRunningCommand();
+                return;
             }
 
-            // Kill the server when the debugging is disconnected
-            const disp = vscode.debug.onDidTerminateDebugSession((session) => {
-                if (session.id === debugSessionId) {
-                    disp.dispose(); // Clean up the event listener
-                    serverExec?.terminate();
+            const session = await sessionPromise;
+
+            let cleanedUp = false;
+            const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
+                debugEndDisp.dispose();
+                taskEndDisp.dispose();
+                serverExec?.terminate();
+                // Task termination may not propagate into Docker containers
+                // (dazel), so explicitly cancel the Bazel server action.
+                this.bazelService.cancelRunningCommand();
+            };
+
+            const debugEndDisp = vscode.debug.onDidTerminateDebugSession(s => {
+                if (s.id === session.id) {
+                    cleanup();
+                }
+            });
+
+            // Safety net: if the bazel task ends without a corresponding debug
+            // session termination (e.g. test timeout inside the container),
+            // make sure we still release the Bazel server lock.
+            const taskEndDisp = vscode.tasks.onDidEndTask(e => {
+                if (e.execution === serverExec) {
+                    cleanup();
                 }
             });
         });
