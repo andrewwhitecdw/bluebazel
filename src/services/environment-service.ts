@@ -24,6 +24,7 @@
 
 import { Console } from './console';
 import { ExtensionUtils } from './extension-utils';
+import { isWindows } from './platform-utils';
 import { ShellService } from './shell-service';
 import { WorkspaceService } from './workspace-service';
 import * as vscode from 'vscode';
@@ -42,8 +43,9 @@ export class EnvironmentService {
         if (envSetupCommand) {
             try {
                 // Run the setup command, ensuring it prints the environment variables
+                const envListCmd = isWindows() ? 'set' : 'env';
                 const result = await ShellService.run(
-                    `${envSetupCommand} && echo ${envDelimiter} && env`,
+                    `${envSetupCommand} && echo ${envDelimiter} && ${envListCmd}`,
                     WorkspaceService.getInstance().getWorkspaceFolder().uri.fsPath,
                     {},
                     cancellationToken

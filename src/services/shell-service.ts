@@ -23,7 +23,7 @@
 // SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////////
 
-import { getBashPath } from './platform-utils';
+import { getBashPath, isWindows } from './platform-utils';
 import * as child from 'child_process';
 import * as vscode from 'vscode';
 
@@ -48,12 +48,17 @@ export class ShellService {
         outputChannel?: vscode.OutputChannel
     ): Promise<ProcessOutput> {
         return new Promise<ProcessOutput>((resolve, reject) => {
+            const env: { [key: string]: string | undefined } = { ...process.env, ...setupEnvVars };
+            if (isWindows()) {
+                env['MSYS_NO_PATHCONV'] = '1';
+                env['MSYS2_ARG_CONV_EXCL'] = '*';
+            }
             const execOptions: child.ExecOptions = {
                 cwd: cwd,
-                shell: getBashPath(),
+                shell: isWindows() ? (process.env.ComSpec || 'cmd.exe') : getBashPath(),
                 maxBuffer: Number.MAX_SAFE_INTEGER,
                 windowsHide: false,
-                env: { ...process.env, ...setupEnvVars }
+                env
             };
 
             const proc = child.exec(cmd, execOptions);

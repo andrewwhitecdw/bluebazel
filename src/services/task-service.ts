@@ -24,7 +24,7 @@
 
 import { EnvVarsUtils } from './env-vars-utils';
 import { ExtensionUtils } from './extension-utils';
-import { getBashPath } from './platform-utils';
+import { getBashPath, isWindows } from './platform-utils';
 import { clearTerminal } from '../ui/terminal';
 import * as vscode from 'vscode';
 
@@ -67,13 +67,21 @@ export class TaskService {
         problemMatcher: string | string[] = '$gcc') {
         const workspaceFolder = this.workspaceFolder;
 
-        const envVarsObj = { ...EnvVarsUtils.listToObject(this.setupEnvVars), ...envVars };
+        const envVarsObj: { [key: string]: string } = { ...EnvVarsUtils.listToObject(this.setupEnvVars), ...envVars };
+        if (isWindows()) {
+            envVarsObj['MSYS_NO_PATHCONV'] = '1';
+            envVarsObj['MSYS2_ARG_CONV_EXCL'] = '*';
+        }
         let execution: vscode.ShellExecution | vscode.ProcessExecution | vscode.CustomExecution;
         if (executionType === 'shell') {
-            execution = new vscode.ShellExecution(command, {
-                cwd: workspaceFolder.uri.fsPath, env: envVarsObj,
-                executable: getBashPath(),
-                shellArgs: ['-c'] });
+            const shellOpts: vscode.ShellExecutionOptions = {
+                cwd: workspaceFolder.uri.fsPath, env: envVarsObj
+            };
+            if (!isWindows()) {
+                shellOpts.executable = getBashPath();
+                shellOpts.shellArgs = ['-c'];
+            }
+            execution = new vscode.ShellExecution(command, shellOpts);
         } else {
             const args = command.split(' ');
             execution = new vscode.ProcessExecution(args[0], args.slice(1), { cwd: workspaceFolder.uri.fsPath, env: envVarsObj });
