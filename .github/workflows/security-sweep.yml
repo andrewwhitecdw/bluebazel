@@ -115,10 +115,14 @@ jobs:
             > scan-manifest.json
           cat scan-manifest.json >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Compute artifact-safe branch name
+        id: art
+        run: echo "safe_branch=${{ inputs.branch || github.ref_name }}" | tr '/:' '--' >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: scan-manifest-${{ inputs.branch || github.ref_name }}
+          name: scan-manifest-${{ steps.art.outputs.safe_branch }}
           path: |
             scan-manifest.json
             *.sarif
