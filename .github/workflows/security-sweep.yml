@@ -48,13 +48,12 @@ jobs:
           generateSarif: true
         continue-on-error: true
 
-      - uses: google/osv-scanner-action@v1
-        with:
-          scan-args: |-
-            --format=sarif
-            --output=osv.sarif
-            ./
+      - name: OSV-Scanner
         continue-on-error: true
+        run: |
+          curl -sSfL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /tmp/osv-scanner
+          chmod +x /tmp/osv-scanner
+          /tmp/osv-scanner scan --format=sarif --output=osv.sarif . || true
 
       - name: Upload SARIF results
         if: always()
