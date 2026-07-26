@@ -1,0 +1,97 @@
+name: security-sweep
+# Canonical copy: ~/.local/share/awdemos-sweep/security-sweep.yml
+# Lives on fork DEFAULT branches (workflow_dispatch requires default branch).
+# Kept out of sweep/bugfix-* branches so it never appears in upstream PR diffs.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to scan (e.g. sweep/bugfix-foo)"
+        required: true
+      commit:
+        description: "Expected HEAD SHA of that branch"
+        required: true
+  push: # fires automatically only for branches that themselves contain this file
+    branches: ["sweep/**"]
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload to Code Scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+
+      - name: Pin to expected commit
+        run: |
+          if [ -n "${{ inputs.commit }}" ]; then
+            test "$(git rev-parse HEAD)" = "${{ inputs.commit }}" || { echo "HEAD mismatch - branch moved"; exit 1; }
+          fi
+
+      - uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+
+      - uses: semgrep/semgrep-action@v1
+        with:
+          config: p/default
+          generateSarif: true
+        continue-on-error: true
+
+      - uses: google/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            --format=sarif
+            --output=osv.sarif
+            ./
+        continue-on-error: true
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: .
+          category: security-sweep
+
+      - name: Generate scan fingerprint manifest
+        if: always()
+        run: |
+          SCAN_UUID=$(uuidgen)
+          TREE=$(git rev-parse 'HEAD^{tree}')
+          COMMIT=$(git rev-parse HEAD)
+          SARIF_HASHES=$(sha256sum *.sarif 2>/dev/null | sort | sha256sum | cut -d' ' -f1)
+          FINGERPRINT=$(echo -n "${TREE}${SARIF_HASHES}" | sha256sum | cut -d' ' -f1)
+          jq -n \
+            --arg scan_uuid "$SCAN_UUID" \
+            --arg fingerprint "$FINGERPRINT" \
+            --arg commit "$COMMIT" \
+            --arg tree "$TREE" \
+            --arg branch "${{ inputs.branch || github.ref_name }}" \
+            --arg repo "${{ github.repository }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg scanned_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{scan_uuid:$scan_uuid, fingerprint:$fingerprint, repo:$repo, branch:$branch,
+              commit:$commit, tree:$tree, run_id:$run_id, run_url:$run_url, scanned_at:$scanned_at,
+              tools:{gitleaks:"action@v2", trivy:"action@master", semgrep:"action@v1", osv:"action@v1"}}' \
+            > scan-manifest.json
+          cat scan-manifest.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-manifest-${{ inputs.branch || github.ref_name }}
+          path: |
+            scan-manifest.json
+            *.sarif
+          retention-days: 90
